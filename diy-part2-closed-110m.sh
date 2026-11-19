@@ -85,4 +85,10 @@ curl -fsSL --retry 3 https://ispip.clang.cn/all_cn_ipv6.txt | awk '{print "add c
 # 给生成的脚本赋予执行权限
 chmod +x package/base-files/files/etc/uci-defaults/99-custom-settings
 
+# ==================== 修复 Rust CI LLVM 过期 404 报错 ====================
+if [ -f feeds/packages/lang/rust/Makefile ]; then
+  sed -i 's/download-ci-llvm=true/download-ci-llvm=false/g; s/download-ci-llvm=if-unchanged/download-ci-llvm=false/g' feeds/packages/lang/rust/Makefile
+  echo "已修复 Rust download-ci-llvm 配置"
+fi
+
 echo "diy-part2-closed-110m.sh 执行完成：110m 机型已注入，最终定制逻辑已注入！"
