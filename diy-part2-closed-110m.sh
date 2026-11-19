@@ -1,11 +1,5 @@
 #!/bin/bash
 # diy-part2-closed-110m.sh: 闭源驱动版 110m 大分区 DIY script part 2
-# 与 diy-part2-closed.sh 完全相同，另加一步：把 110m 机型注入编译树
-# （rebase 上游只有 stock 与 ubootmod 两个 AX6000 机型，没有 110m 机型；
-#  110m 布局 = 单个 110MB ubi 分区，对应 hanwckf uboot 的 immortalwrt-110m 布局）。
-# 注入的两样东西都在仓库 devices/ax6000-110m/ 里：
-#   mt7986a-xiaomi-redmi-router-ax6000-110m.dts → target/linux/mediatek/dts/
-#   filogic-110m-device.mk（机型定义）→ 追加到 target/linux/mediatek/image/filogic.mk 末尾
 
 # ============ 110m 大分区机型注入 ============
 DTS_SRC="${GITHUB_WORKSPACE:-..}/devices/ax6000-110m/mt7986a-xiaomi-redmi-router-ax6000-110m.dts"
@@ -16,21 +10,17 @@ grep -q "xiaomi_redmi-router-ax6000-110m" target/linux/mediatek/image/filogic.mk
 [ -f target/linux/mediatek/dts/mt7986a-xiaomi-redmi-router-ax6000-110m.dts ] || { echo "110m DTS 未就位"; exit 1; }
 echo "110m 机型注入完成"
 
-# 修改默认 IP、主机名
-sed -i 's/192.168.1.1/192.168.8.1/g' package/base-files/files/bin/config_generate
+# 修改默认 IP 为 192.168.6.1、主机名
+sed -i 's/192.168.1.1/192.168.6.1/g' package/base-files/files/bin/config_generate
 sed -i 's/OpenWrt/Redmi-AX6000/g' package/base-files/files/bin/config_generate
-# 主题：保留默认 Bootstrap 兜底，不再强制替换为 Argon；
-# Vantage 首次开机通过自带的 30_luci-theme-vantage 自动设为默认主题。
 
-# firewall4 FullCone 补丁：25.12（master）的 firewall4 已升级到 2026-11-08，
-# 上游删掉了 config 里的 disable_ipv6 行，自带旧补丁第一块打不上导致编译失败；
-# 只有新版才用仓库里重做过的补丁替换，24.10 保持原样不动
+# firewall4 FullCone 补丁适配
 if grep -q "^PKG_SOURCE_DATE:=2026-11-08" package/network/config/firewall4/Makefile 2>/dev/null; then
   cp "${GITHUB_WORKSPACE:-..}/patches/001-firewall4-add-support-for-fullcone-nat.patch" package/network/config/firewall4/patches/001-firewall4-add-support-for-fullcone-nat.patch
   echo "已替换 firewall4 FullCone 补丁为适配新版（2026-11-08）的版本"
 fi
 
-# ==================== 注入你的私人定制配置 ====================
+# ==================== 注入私人定制配置 ====================
 mkdir -p package/base-files/files/etc/uci-defaults
 
 cat << "EOF" > package/base-files/files/etc/uci-defaults/99-custom-settings
@@ -45,33 +35,40 @@ uci delete network.wan.username
 uci delete network.wan.password
 uci commit network
 
-# 3. WiFi：闭源驱动版不走标准 uci wireless（mtwifi 用自家的 wifi-profile 配置），
-#    上面那套 uci 设置写了也不生效，所以这里不写；刷完后在 LuCI → MTK WiFi 里改名称和密码。
-#    注意：首次开机 WiFi 名称/密码是驱动默认 profile 的值，不是 OpenWrt_2.4G/5G。
-
-# 4. 强制设置中文界面 + 上海时区
+# 3. 强制设置中文界面 + 上海时区
 uci set luci.main.lang='zh_cn'
 uci set system.@system[0].timezone='CST-8'
 uci set system.@system[0].zonename='Asia/Shanghai'
 uci commit luci
 uci commit system
 
-# 7. 重新加载服务使配置生效
+# 4. 固化官方 apk 软件源（剔除失效的 video 源及第三方延迟镜像）
+mkdir -p /etc/apk/repositories.d
+cat << "FEEDS" > /etc/apk/repositories.d/distfeeds.list
+https://downloads.immortalwrt.org/releases/25.12-SNAPSHOT/targets/mediatek/filogic/packages/packages.adb
+https://downloads.immortalwrt.org/releases/25.12-SNAPSHOT/packages/aarch64_cortex-a53/base/packages.adb
+https://downloads.immortalwrt.org/releases/25.12-SNAPSHOT/packages/aarch64_cortex-a53/luci/packages.adb
+https://downloads.immortalwrt.org/releases/25.12-SNAPSHOT/packages/aarch64_cortex-a53/packages/packages.adb
+https://downloads.immortalwrt.org/releases/25.12-SNAPSHOT/packages/aarch64_cortex-a53/routing/packages.adb
+https://downloads.immortalwrt.org/releases/25.12-SNAPSHOT/packages/aarch64_cortex-a53/telephony/packages.adb
+FEEDS
+
+# 5. 重新加载服务使配置生效
 /etc/init.d/network restart
 
-echo "99-custom-settings 执行完成：拨号、WiFi分离、中文界面、Tailscale社区源已就绪"
+echo "99-custom-settings 执行完成"
 exit 0
 EOF
 
 # ==================== 预置 OpenClash 内核与 GeoIP 数据库 ====================
 mkdir -p package/base-files/files/etc/openclash/core
 
-# 1. 下载 ARM64 版 mihomo (Meta) 内核（带 3 次重试容错）
+# 1. 下载 ARM64 版 mihomo (Meta) 内核
 curl -fsSL --retry 3 https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/clash-linux-arm64.tar.gz | tar -xz -C package/base-files/files/etc/openclash/core/
 mv package/base-files/files/etc/openclash/core/clash package/base-files/files/etc/openclash/core/clash_meta
 chmod +x package/base-files/files/etc/openclash/core/clash_meta
 
-# 2. 预置 GeoIP.dat 数据库（其余 4 个规则库已由 luci-app-openclash 安装包自带，无需重复写入）
+# 2. 预置 GeoIP.dat 数据库
 curl -fsSL --retry 3 https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat -o package/base-files/files/etc/openclash/GeoIP.dat
 
 # 给生成的脚本赋予执行权限
@@ -83,4 +80,4 @@ if [ -f feeds/packages/lang/rust/Makefile ]; then
   echo "已修复 Rust download-ci-llvm 配置"
 fi
 
-echo "diy-part2-closed-110m.sh 执行完成：110m 机型已注入，最终定制逻辑已注入！"
+echo "diy-part2-closed-110m.sh 执行完成：110m 机型与定制配置已注入！"
