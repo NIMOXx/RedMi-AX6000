@@ -63,7 +63,7 @@ echo "99-custom-settings 执行完成：拨号、WiFi分离、中文界面、Tai
 exit 0
 EOF
 
-# ==================== 预置 OpenClash 内核与全套规则数据库 ====================
+# ==================== 预置 OpenClash 内核与 GeoIP 数据库 ====================
 mkdir -p package/base-files/files/etc/openclash/core
 
 # 1. 下载 ARM64 版 mihomo (Meta) 内核（带 3 次重试容错）
@@ -71,16 +71,8 @@ curl -fsSL --retry 3 https://raw.githubusercontent.com/vernesong/OpenClash/core/
 mv package/base-files/files/etc/openclash/core/clash package/base-files/files/etc/openclash/core/clash_meta
 chmod +x package/base-files/files/etc/openclash/core/clash_meta
 
-# 2. 预置 GeoIP 与 GeoSite 数据库（避免刷机后首次启动卡规则下载）
-curl -fsSL --retry 3 https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/country.mmdb -o package/base-files/files/etc/openclash/Country.mmdb
+# 2. 预置 GeoIP.dat 数据库（其余 4 个规则库已由 luci-app-openclash 安装包自带，无需重复写入）
 curl -fsSL --retry 3 https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat -o package/base-files/files/etc/openclash/GeoIP.dat
-curl -fsSL --retry 3 https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat -o package/base-files/files/etc/openclash/GeoSite.dat
-
-# 3. 预置 IPv4 与 IPv6 大陆白名单路由表
-echo "create china_ip_route hash:net family inet hashsize 1024 maxelem 1000000" > package/base-files/files/etc/openclash/china_ip_route.ipset
-curl -fsSL --retry 3 https://ispip.clang.cn/all_cn.txt | awk '{print "add china_ip_route " $1}' >> package/base-files/files/etc/openclash/china_ip_route.ipset
-echo "create china_ip6_route hash:net family inet6 hashsize 1024 maxelem 1000000" > package/base-files/files/etc/openclash/china_ip6_route.ipset
-curl -fsSL --retry 3 https://ispip.clang.cn/all_cn_ipv6.txt | awk '{print "add china_ip6_route " $1}' >> package/base-files/files/etc/openclash/china_ip6_route.ipset
 
 # 给生成的脚本赋予执行权限
 chmod +x package/base-files/files/etc/uci-defaults/99-custom-settings
