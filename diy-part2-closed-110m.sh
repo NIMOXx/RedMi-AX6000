@@ -142,7 +142,7 @@ EOF
 
 chmod 755 package/base-files/files/etc/hotplug.d/iface/99-bark-notify
 
-# ==================== 预置 OpenClash 内核与规则数据库 ====================
+# ==================== 预置 OpenClash 内核与 GeoIP 数据库 ====================
 mkdir -p package/base-files/files/etc/openclash/core
 
 # 1. 下载 ARM64 版 mihomo (Meta) 内核
@@ -150,9 +150,8 @@ curl -fsSL --retry 3 https://raw.githubusercontent.com/vernesong/OpenClash/core/
 mv package/base-files/files/etc/openclash/core/clash package/base-files/files/etc/openclash/core/clash_meta
 chmod +x package/base-files/files/etc/openclash/core/clash_meta
 
-# 2. 预置 GeoIP.dat 与 GeoSite.dat 数据库
+# 2. 预置 GeoIP.dat 数据库（GeoSite.dat 由 luci-app-openclash 包自带，避免冲突）
 curl -fsSL --retry 3 https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat -o package/base-files/files/etc/openclash/GeoIP.dat
-curl -fsSL --retry 3 https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat -o package/base-files/files/etc/openclash/GeoSite.dat
 
 # ==================== 修复 Rust CI LLVM 过期 404 报错（兜底） ====================
 if [ -f feeds/packages/lang/rust/Makefile ]; then
