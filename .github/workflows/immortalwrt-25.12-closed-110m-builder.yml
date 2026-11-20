@@ -164,3 +164,12 @@ jobs:
         overwrite_files: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Clean up old releases (keep latest 3)
+      if: env.UPLOAD_RELEASE == 'true' && steps.compile.outcome == 'success' && !cancelled()
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release list --repo "${{ github.repository }}" --limit 100 --json tagName,createdAt --jq 'sort_by(.createdAt) | reverse | .[5:] | .[].tagName' | while IFS= read -r tag; do
+          [ -n "$tag" ] && echo "删除旧 Release 及标签: $tag" && gh release delete "$tag" --repo "${{ github.repository }}" --yes --cleanup-tag
+        done
