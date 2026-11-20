@@ -173,3 +173,27 @@ jobs:
         gh release list --repo "${{ github.repository }}" --limit 100 --json tagName,createdAt --jq 'sort_by(.createdAt) | reverse | .[5:] | .[].tagName' | while IFS= read -r tag; do
           [ -n "$tag" ] && echo "删除旧 Release 及标签: $tag" && gh release delete "$tag" --repo "${{ github.repository }}" --yes --cleanup-tag
         done
+        
+    - name: Send Bark notification
+      if: always() && !cancelled()
+      env:
+        BARK_URL: ${{ secrets.BARK_URL }}
+        COMPILE_OUTCOME: ${{ steps.compile.outcome }}
+        RELEASE_TAG: ${{ steps.tag.outputs.release_tag }}
+      run: |
+        [ -z "$BARK_URL" ] && echo "未配置 BARK_URL，跳过推送" && exit 0
+        BARK_URL="${BARK_URL%/}"
+        if [ "$COMPILE_OUTCOME" = "success" ]; then
+          TITLE="AX6000 固件编译成功"
+          BODY="新版本已发布：${RELEASE_TAG}"
+          JUMP_URL="https://github.com/${{ github.repository }}/releases/tag/${RELEASE_TAG}"
+        else
+          TITLE="AX6000 固件编译失败"
+          BODY="构建未完成，点击查看 Actions 日志"
+          JUMP_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+        fi
+        PAYLOAD=$(jq -n --arg title "$TITLE" --arg body "$BODY" --arg url "$JUMP_URL" \
+          '{title: $title, body: $body, group: "Redmi-AX6000", url: $url}')
+        curl -fsS -X POST "$BARK_URL" \
+          -H 'Content-Type: application/json; charset=utf-8' \
+          -d "$PAYLOAD"
