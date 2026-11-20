@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-# diy-part2-closed-110m.sh: 闭源驱动版 110m 大分区终极完整脚本
+# diy-part2-closed-110m.sh: 闭源驱动版 110m 大分区终极完整脚本（含无 Key 版 Bark 推送）
 
 # ============ 110m 大分区机型注入 ============
 DTS_SRC="${GITHUB_WORKSPACE:-..}/devices/ax6000-110m/mt7986a-xiaomi-redmi-router-ax6000-110m.dts"
@@ -82,6 +82,66 @@ EOF
 
 chmod +x package/base-files/files/etc/uci-defaults/99-custom-settings
 
+# ==================== 固化无 Key 版 Bark 开机/重连推送脚本 ====================
+mkdir -p package/base-files/files/etc/hotplug.d/iface
+mkdir -p package/base-files/files/lib/upgrade/keep.d
+
+# 1. 预置空 Key 文件并注册到升级永久保留清单
+touch package/base-files/files/etc/bark_key
+echo "/etc/bark_key" > package/base-files/files/lib/upgrade/keep.d/bark-notify
+
+# 2. 写入 Hotplug 监听脚本（自动读取 /etc/bark_key，兼容纯 Key 或完整 URL）
+cat << 'EOF' > package/base-files/files/etc/hotplug.d/iface/99-bark-notify
+#!/bin/sh
+
+[ "$ACTION" = "ifup" ] || exit 0
+[ "$INTERFACE" = "wan" ] || exit 0
+
+KEY_FILE="/etc/bark_key"
+[ -s "$KEY_FILE" ] || exit 0
+
+RAW_KEY=$(tr -d ' \r\n' < "$KEY_FILE")
+[ -z "$RAW_KEY" ] && exit 0
+
+RAW_KEY="${RAW_KEY%/}"
+if [ "${RAW_KEY#http}" = "$RAW_KEY" ]; then
+  BARK_URL="https://api.day.app/${RAW_KEY}"
+else
+  BARK_URL="$RAW_KEY"
+fi
+
+mkdir /tmp/bark_notify.lock 2>/dev/null || exit 0
+
+(
+  trap 'rmdir /tmp/bark_notify.lock 2>/dev/null' EXIT
+  sleep 10
+
+  WAN_DEV="$DEVICE"
+  [ -z "$WAN_DEV" ] && WAN_DEV=$(ubus call network.interface.wan status 2>/dev/null | jsonfilter -e '@.l3_device' 2>/dev/null)
+  WAN_IP=$(ip -4 addr show dev "$WAN_DEV" 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 | head -n1)
+  [ -z "$WAN_IP" ] && WAN_IP="未获取到"
+  NOW_TIME=$(date "+%Y-%m-%d %H:%M:%S")
+
+  if [ ! -f /tmp/bark_boot_notified ]; then
+    touch /tmp/bark_boot_notified
+    TITLE="Redmi-AX6000 已重启联网"
+    BODY="时间：${NOW_TIME}\nWAN IP：${WAN_IP}"
+  else
+    TITLE="Redmi-AX6000 外网已重连"
+    BODY="时间：${NOW_TIME}\n新 WAN IP：${WAN_IP}"
+  fi
+
+  curl -fsSL --retry 3 --retry-delay 5 --connect-timeout 10 --max-time 20 \
+    -X POST "$BARK_URL" \
+    -H "Content-Type: application/json; charset=utf-8" \
+    -d "{\"title\":\"${TITLE}\",\"body\":\"${BODY}\",\"group\":\"Redmi-AX6000\"}" >/dev/null 2>&1
+
+  logger -t bark-notify "已发送推送: ${TITLE} (${WAN_IP})"
+) &
+EOF
+
+chmod 755 package/base-files/files/etc/hotplug.d/iface/99-bark-notify
+
 # ==================== 预置 OpenClash 内核与规则数据库 ====================
 mkdir -p package/base-files/files/etc/openclash/core
 
@@ -99,4 +159,4 @@ if [ -f feeds/packages/lang/rust/Makefile ]; then
   sed -i 's/download-ci-llvm=true/download-ci-llvm=false/g; s/download-ci-llvm=if-unchanged/download-ci-llvm=false/g' feeds/packages/lang/rust/Makefile
 fi
 
-echo "diy-part2-closed-110m.sh 执行完成：110m 机型与定制配置已注入！"
+echo "diy-part2-closed-110m.sh 执行完成：110m 机型、定制配置与无 Key 版 Bark 推送已注入！"
