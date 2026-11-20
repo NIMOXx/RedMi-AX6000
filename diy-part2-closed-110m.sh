@@ -1,17 +1,16 @@
 #!/bin/bash
 set -e
-# diy-part2-closed-110m.sh: 闭源驱动版 110m 大分区终极完整脚本（含无 Key 版 Bark 推送）
+# diy-part2-closed-110m.sh: 闭源驱动版 110m 大分区终极完整脚本（采用 files/ 覆盖层彻底杜绝 apk 文件冲突）
 
 # ============ 110m 大分区机型注入 ============
 DTS_SRC="${GITHUB_WORKSPACE:-..}/devices/ax6000-110m/mt7986a-xiaomi-redmi-router-ax6000-110m.dts"
 MK_SRC="${GITHUB_WORKSPACE:-..}/devices/ax6000-110m/filogic-110m-device.mk"
 cp "$DTS_SRC" target/linux/mediatek/dts/mt7986a-xiaomi-redmi-router-ax6000-110m.dts
-cat "$MK_SRC" >> target/linux/mediatek/image/filogic.mk
-grep -q "xiaomi_redmi-router-ax6000-110m" target/linux/mediatek/image/filogic.mk
+grep -q "xiaomi_redmi-router-ax6000-110m" target/linux/mediatek/image/filogic.mk || cat "$MK_SRC" >> target/linux/mediatek/image/filogic.mk
 [ -f target/linux/mediatek/dts/mt7986a-xiaomi-redmi-router-ax6000-110m.dts ]
 echo "110m 机型注入完成"
 
-# 修改默认 IP 为 192.168.6.1、修复主机名为 Redmi-AX6000
+# 修改默认 IP 为 192.168.6.1、主机名为 Redmi-AX6000
 sed -i 's/192.168.1.1/192.168.6.1/g' package/base-files/files/bin/config_generate
 sed -i 's/ImmortalWrt/Redmi-AX6000/g; s/OpenWrt/Redmi-AX6000/g' package/base-files/files/bin/config_generate
 
@@ -21,10 +20,10 @@ if grep -q "^PKG_SOURCE_DATE:=2026-11-08" package/network/config/firewall4/Makef
   echo "已替换 firewall4 FullCone 补丁"
 fi
 
-# ==================== 注入首次开机定制脚本 ====================
-mkdir -p package/base-files/files/etc/uci-defaults
+# ==================== 注入首次开机定制脚本（files/ 覆盖层） ====================
+mkdir -p files/etc/uci-defaults
 
-cat << "EOF" > package/base-files/files/etc/uci-defaults/99-custom-settings
+cat << "EOF" > files/etc/uci-defaults/99-custom-settings
 #!/bin/sh
 
 # 1. 设置后台登录密码 (password)
@@ -80,18 +79,18 @@ echo "99-custom-settings 执行完成"
 exit 0
 EOF
 
-chmod +x package/base-files/files/etc/uci-defaults/99-custom-settings
+chmod 755 files/etc/uci-defaults/99-custom-settings
 
 # ==================== 固化无 Key 版 Bark 开机/重连推送脚本 ====================
-mkdir -p package/base-files/files/etc/hotplug.d/iface
-mkdir -p package/base-files/files/lib/upgrade/keep.d
+mkdir -p files/etc/hotplug.d/iface
+mkdir -p files/lib/upgrade/keep.d
 
 # 1. 预置空 Key 文件并注册到升级永久保留清单
-touch package/base-files/files/etc/bark_key
-echo "/etc/bark_key" > package/base-files/files/lib/upgrade/keep.d/bark-notify
+touch files/etc/bark_key
+echo "/etc/bark_key" > files/lib/upgrade/keep.d/bark-notify
 
 # 2. 写入 Hotplug 监听脚本（自动读取 /etc/bark_key，兼容纯 Key 或完整 URL）
-cat << 'EOF' > package/base-files/files/etc/hotplug.d/iface/99-bark-notify
+cat << 'EOF' > files/etc/hotplug.d/iface/99-bark-notify
 #!/bin/sh
 
 [ "$ACTION" = "ifup" ] || exit 0
@@ -140,22 +139,23 @@ mkdir /tmp/bark_notify.lock 2>/dev/null || exit 0
 ) &
 EOF
 
-chmod 755 package/base-files/files/etc/hotplug.d/iface/99-bark-notify
+chmod 755 files/etc/hotplug.d/iface/99-bark-notify
 
-# ==================== 预置 OpenClash 内核与 GeoIP 数据库 ====================
-mkdir -p package/base-files/files/etc/openclash/core
+# ==================== 预置 OpenClash 内核与规则数据库（files/ 覆盖层，零 apk 冲突） ====================
+mkdir -p files/etc/openclash/core
 
 # 1. 下载 ARM64 版 mihomo (Meta) 内核
-curl -fsSL --retry 3 https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/clash-linux-arm64.tar.gz | tar -xz -C package/base-files/files/etc/openclash/core/
-mv package/base-files/files/etc/openclash/core/clash package/base-files/files/etc/openclash/core/clash_meta
-chmod +x package/base-files/files/etc/openclash/core/clash_meta
+curl -fsSL --retry 3 https://raw.githubusercontent.com/vernesong/OpenClash/core/master/meta/clash-linux-arm64.tar.gz | tar -xz -C files/etc/openclash/core/
+mv files/etc/openclash/core/clash files/etc/openclash/core/clash_meta
+chmod 755 files/etc/openclash/core/clash_meta
 
-# 2. 预置 GeoIP.dat 数据库（GeoSite.dat 由 luci-app-openclash 包自带，避免冲突）
-curl -fsSL --retry 3 https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat -o package/base-files/files/etc/openclash/GeoIP.dat
+# 2. 预置最新 GeoIP.dat 与 GeoSite.dat（通过 files/ 覆盖层在 apk 安装后覆盖，不会触发包冲突）
+curl -fsSL --retry 3 https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat -o files/etc/openclash/GeoIP.dat
+curl -fsSL --retry 3 https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geosite.dat -o files/etc/openclash/GeoSite.dat
 
 # ==================== 修复 Rust CI LLVM 过期 404 报错（兜底） ====================
 if [ -f feeds/packages/lang/rust/Makefile ]; then
   sed -i 's/download-ci-llvm=true/download-ci-llvm=false/g; s/download-ci-llvm=if-unchanged/download-ci-llvm=false/g' feeds/packages/lang/rust/Makefile
 fi
 
-echo "diy-part2-closed-110m.sh 执行完成：110m 机型、定制配置与无 Key 版 Bark 推送已注入！"
+echo "diy-part2-closed-110m.sh 执行完成：110m 机型、定制配置、OpenClash 内核/规则与无 Key 版 Bark 推送已注入！"
