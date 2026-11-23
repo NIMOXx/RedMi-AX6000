@@ -29,6 +29,12 @@ jobs:
     outputs:
       should_build: ${{ steps.check.outputs.should_build }}
       upstream_hash: ${{ steps.check.outputs.upstream_hash }}
+      main_sha: ${{ steps.check.outputs.main_sha }}
+      oc_sha: ${{ steps.check.outputs.oc_sha }}
+      vt_sha: ${{ steps.check.outputs.vt_sha }}
+      last_main_sha: ${{ steps.check.outputs.last_main_sha }}
+      last_oc_sha: ${{ steps.check.outputs.last_oc_sha }}
+      last_vt_sha: ${{ steps.check.outputs.last_vt_sha }}
     steps:
     - name: Check upstream commits
       id: check
@@ -45,7 +51,19 @@ jobs:
         fi
         CURRENT_HASH="main:${MAIN_SHA}|openclash:${OC_SHA}|vantage:${VT_SHA}"
         echo "upstream_hash=${CURRENT_HASH}" >> "$GITHUB_OUTPUT"
+        echo "main_sha=${MAIN_SHA}" >> "$GITHUB_OUTPUT"
+        echo "oc_sha=${OC_SHA}" >> "$GITHUB_OUTPUT"
+        echo "vt_sha=${VT_SHA}" >> "$GITHUB_OUTPUT"
         echo "当前上游版本: ${CURRENT_HASH}"
+
+        LAST_BODY=$(gh release view --repo "${{ github.repository }}" --json body -q '.body' 2>/dev/null || true)
+        LAST_HASH_LINE=$(echo "$LAST_BODY" | grep -oE 'UPSTREAM_HASH=[^[:space:]]+' | head -n 1 || true)
+        LAST_MAIN=$(echo "$LAST_HASH_LINE" | grep -oP '(?<=main:)[a-f0-9]+' || true)
+        LAST_OC=$(echo "$LAST_HASH_LINE" | grep -oP '(?<=openclash:)[a-f0-9]+' || true)
+        LAST_VT=$(echo "$LAST_HASH_LINE" | grep -oP '(?<=vantage:)[a-f0-9]+' || true)
+        echo "last_main_sha=${LAST_MAIN}" >> "$GITHUB_OUTPUT"
+        echo "last_oc_sha=${LAST_OC}" >> "$GITHUB_OUTPUT"
+        echo "last_vt_sha=${LAST_VT}" >> "$GITHUB_OUTPUT"
 
         if [ "${{ github.event_name }}" != "schedule" ]; then
           echo "手动或事件触发，强制执行编译"
@@ -53,7 +71,6 @@ jobs:
           exit 0
         fi
 
-        LAST_BODY=$(gh release view --repo "${{ github.repository }}" --json body -q '.body' 2>/dev/null || true)
         if echo "$LAST_BODY" | grep -qF "UPSTREAM_HASH=${CURRENT_HASH}"; then
           echo "上游无新提交，跳过本次编译"
           echo "should_build=false" >> "$GITHUB_OUTPUT"
@@ -157,12 +174,48 @@ jobs:
         path: ${{ env.FIRMWARE }}
         retention-days: 7
 
-    - name: Generate release tag
+    - name: Generate release tag and changelog
       id: tag
       if: env.UPLOAD_RELEASE == 'true' && steps.compile.outcome == 'success' && !cancelled()
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        MAIN_SHA: ${{ needs.check_update.outputs.main_sha }}
+        OC_SHA: ${{ needs.check_update.outputs.oc_sha }}
+        VT_SHA: ${{ needs.check_update.outputs.vt_sha }}
+        LAST_MAIN: ${{ needs.check_update.outputs.last_main_sha }}
+        LAST_OC: ${{ needs.check_update.outputs.last_oc_sha }}
+        LAST_VT: ${{ needs.check_update.outputs.last_vt_sha }}
       run: |
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")-${{ env.FIRMWARE_TAG }}" >> "$GITHUB_OUTPUT"
-        echo "UPSTREAM_HASH=${{ needs.check_update.outputs.upstream_hash }}" > release.txt
+
+        append_changelog() {
+          local title="$1"
+          local repo="$2"
+          local old_sha="$3"
+          local new_sha="$4"
+          echo "### ${title} (\`${new_sha}\`)" >> release.txt
+          if [ -z "$old_sha" ]; then
+            echo "- 首次记录基线版本，无历史对比记录。" >> release.txt
+          elif [ "$old_sha" = "$new_sha" ]; then
+            echo "- 无新增提交。" >> release.txt
+          else
+            echo "- 完整对比：https://github.com/${repo}/compare/${old_sha}...${new_sha}" >> release.txt
+            curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${repo}/compare/${old_sha}...${new_sha}" \
+              | jq -r '.commits[-30:][] | "- `\(.sha[0:7])` \(.commit.message | split("\n")[0]) (\(.commit.author.name))"' >> release.txt \
+              || echo "- 获取提交记录失败，请点击上方对比链接查看。" >> release.txt
+          fi
+          echo "" >> release.txt
+        }
+
+        echo "## 上游源码更新日志" > release.txt
+        echo "" >> release.txt
+        append_changelog "ImmortalWrt 主源码 (25.12)" "chasey-dev/immortalwrt-mt798x-rebase" "$LAST_MAIN" "$MAIN_SHA"
+        append_changelog "OpenClash" "vernesong/OpenClash" "$LAST_OC" "$OC_SHA"
+        append_changelog "luci-theme-vantage" "anothaDev/luci-theme-vantage" "$LAST_VT" "$VT_SHA"
+        echo "---" >> release.txt
+        echo "UPSTREAM_HASH=${{ needs.check_update.outputs.upstream_hash }}" >> release.txt
 
     - name: Upload firmware to release
       uses: softprops/action-gh-release@v2
@@ -191,16 +244,34 @@ jobs:
         BARK_URL: ${{ secrets.BARK_URL }}
         COMPILE_OUTCOME: ${{ steps.compile.outcome }}
         RELEASE_TAG: ${{ steps.tag.outputs.release_tag }}
+        MAIN_SHA: ${{ needs.check_update.outputs.main_sha }}
+        OC_SHA: ${{ needs.check_update.outputs.oc_sha }}
+        VT_SHA: ${{ needs.check_update.outputs.vt_sha }}
+        LAST_MAIN: ${{ needs.check_update.outputs.last_main_sha }}
+        LAST_OC: ${{ needs.check_update.outputs.last_oc_sha }}
+        LAST_VT: ${{ needs.check_update.outputs.last_vt_sha }}
       run: |
         [ -z "$BARK_URL" ] && echo "未配置 BARK_URL，跳过推送" && exit 0
         BARK_URL="${BARK_URL%/}"
+
+        UPDATED=""
+        if [ -z "$LAST_MAIN" ]; then
+          UPDATED="首次基线编译"
+        else
+          [ "$LAST_MAIN" != "$MAIN_SHA" ] && UPDATED="${UPDATED}ImmortalWrt主源码、"
+          [ "$LAST_OC" != "$OC_SHA" ] && UPDATED="${UPDATED}OpenClash、"
+          [ "$LAST_VT" != "$VT_SHA" ] && UPDATED="${UPDATED}Vantage主题、"
+          UPDATED="${UPDATED%、}"
+          [ -z "$UPDATED" ] && UPDATED="无上游变更（手动触发）"
+        fi
+
         if [ "$COMPILE_OUTCOME" = "success" ]; then
           TITLE="AX6000 固件编译成功"
-          BODY="新版本已发布：${RELEASE_TAG}"
+          BODY=$(printf "更新项：%s\n新版本：%s" "$UPDATED" "$RELEASE_TAG")
           JUMP_URL="https://github.com/${{ github.repository }}/releases/tag/${RELEASE_TAG}"
         else
           TITLE="AX6000 固件编译失败"
-          BODY="构建未完成，点击查看 Actions 日志"
+          BODY=$(printf "更新项：%s\n构建未完成，点击查看 Actions 日志" "$UPDATED")
           JUMP_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
         fi
         PAYLOAD=$(jq -n --arg title "$TITLE" --arg body "$BODY" --arg url "$JUMP_URL" \
